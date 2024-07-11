@@ -949,31 +949,14 @@ sudo apt-get update
 
 ```
 gpio readall
+```
 
-+------+-----+----------+--------+---+   H616   +---+--------+----------+-----+------+
- | GPIO | wPi |   Name   |  Mode  | V | Physical | V |  Mode  | Name     | wPi | GPIO |
- +------+-----+----------+--------+---+----++----+---+--------+----------+-----+------+
- |      |     |     3.3V |        |   |  1 || 2  |   |        | 5V       |     |      |
- |  229 |   0 |    SDA.3 |    OFF | 0 |  3 || 4  |   |        | 5V       |     |      |
- |  228 |   1 |    SCL.3 |    OFF | 0 |  5 || 6  |   |        | GND      |     |      |
- |   73 |   2 |      PC9 |    OFF | 0 |  7 || 8  | 0 | OFF    | TXD.5    | 3   | 226  |
- |      |     |      GND |        |   |  9 || 10 | 0 | OFF    | RXD.5    | 4   | 227  |
- |   70 |   5 |      PC6 |   ALT5 | 0 | 11 || 12 | 0 | OFF    | PC11     | 6   | 75   |
- |   69 |   7 |      PC5 |   ALT5 | 0 | 13 || 14 |   |        | GND      |     |      |
- |   72 |   8 |      PC8 |    OFF | 0 | 15 || 16 | 0 | OFF    | PC15     | 9   | 79   |
- |      |     |     3.3V |        |   | 17 || 18 | 0 | OFF    | PC14     | 10  | 78   |
- |  231 |  11 |   MOSI.1 |    OFF | 0 | 19 || 20 |   |        | GND      |     |      |
- |  232 |  12 |   MISO.1 |    OFF | 0 | 21 || 22 | 0 | OFF    | PC7      | 13  | 71   |
- |  230 |  14 |   SCLK.1 |    OFF | 0 | 23 || 24 | 0 | OFF    | CE.1     | 15  | 233  |
- |      |     |      GND |        |   | 25 || 26 | 0 | OFF    | PC10     | 16  | 74   |
- |   65 |  17 |      PC1 |    OFF | 0 | 27 || 28 |   |        |          |     |      |
- |  272 |  18 |     PI16 |   ALT2 | 0 | 29 || 30 |   |        |          |     |      |
- |  262 |  19 |      PI6 |    OFF | 0 | 31 || 32 |   |        |          |     |      |
- |  234 |  20 |     PH10 |   ALT3 | 0 | 33 || 34 |   |        |          |     |      |
- +------+-----+----------+--------+---+----++----+---+--------+----------+-----+------+
- | GPIO | wPi |   Name   |  Mode  | V | Physical | V |  Mode  | Name     | wPi | GPIO |
- +------+-----+----------+--------+---+   H616   +---+--------+----------+-----+------+
+![image-20240615140936749](./assets/image-20240615140936749.png)
 
+#### 编译c++
+
+```
+g++ gpio.cpp -o gpio -lwiringPi
 ```
 
 #### io 口测试
@@ -1107,6 +1090,163 @@ gpio write 3 0
 gpio write 4 0
 gpio write 21 0
 gpio write 22 0
+```
+
+
+
+##### 连接dht11
+
+```
+#include <stdio.h>
+#include <stdlib.h>
+#include <wiringPi.h>
+#include <pthread.h>
+#include <stdint.h>
+
+#define DHT11_DATA			2
+#define DATA_BIT_LENGTH		32
+#define CHECKSUM_BIT_LENGTH 8
+#define HIGH_TIME			32
+#define EFFECTIVE_BYTES		4
+
+uint32_t dataBuffur;
+uint32_t blockFlag;
+
+void gpioInit(int gpioPin)
+{
+	pinMode(gpioPin, OUTPUT);
+	digitalWrite(gpioPin, HIGH);
+	delay(1000);
+}
+
+void DHT11StartSignal(int gpioPin)
+{
+	pinMode(gpioPin, OUTPUT);
+	digitalWrite(gpioPin, HIGH);
+	digitalWrite(gpioPin, LOW);
+	delay(25);
+	digitalWrite(gpioPin, HIGH);
+
+	pinMode(gpioPin, INPUT);
+
+	pullUpDnControl(gpioPin, PUD_UP);
+	delayMicroseconds(35);
+}
+
+void readTmpAndHum(void)
+{
+	dataBuffur = 0;
+	for (uint8_t i = 0; i < DATA_BIT_LENGTH; i++) {
+		while (digitalRead(DHT11_DATA));
+		while (!digitalRead(DHT11_DATA));
+		delayMicroseconds(HIGH_TIME);
+		dataBuffur <<= 1;
+		if (digitalRead(DHT11_DATA))
+			dataBuffur |= 0x01;
+	}
+}
+
+uint8_t check(void)
+{
+	uint8_t checkSum = 0;
+	uint8_t sum = 0;
+	uint8_t i;
+
+	for (i = 0; i < CHECKSUM_BIT_LENGTH; i++) {
+		while (digitalRead(DHT11_DATA));
+		while (!digitalRead(DHT11_DATA));
+		delayMicroseconds(HIGH_TIME);
+		checkSum <<= 1;
+		if (digitalRead(DHT11_DATA))
+			checkSum |= 0x01;
+	}
+
+	
+	for (i = 0; i < EFFECTIVE_BYTES; i++)
+		sum += (dataBuffur >> (8 * i) & 0xFF);
+
+	if (sum == checkSum)
+		return 0;
+	else
+		return 1;
+}
+
+void *readDHT11Data(void *arg)
+{
+	uint8_t attempt = 5;
+
+	while (attempt) {
+		DHT11StartSignal(DHT11_DATA);
+
+		if (digitalRead(DHT11_DATA) == 0) {
+			while (!digitalRead(DHT11_DATA));
+
+			readTmpAndHum();
+
+			if (check() || ((dataBuffur >> 8) & 0xFF) > 50) {
+				attempt--;
+				delay(500);
+				continue;
+			} else {
+				printf("Humidity: %u.%u\%rh\n", (dataBuffur >> 24) & 0xFF,\
+						(dataBuffur >> 16) & 0xFF);
+				printf("Temperature: %u.%u℃\n",(dataBuffur >> 8) & 0xFF,\
+						dataBuffur & 0xFF);
+				blockFlag = 0;
+				return (void *)1;
+			}
+		} else {
+			blockFlag = 0;
+			printf("Sorry! The sensor is not running.\n");
+			return (void *)0;
+		} /* end of "if (digitalRead(DHT11_DATA) == 0)" */
+	} /* end of "while (attempt)" */
+
+	blockFlag = 0;
+	printf("Sorry! Failed to obtain data!\n");
+	return (void *)2;
+}
+
+
+int main(void)
+{
+	pthread_t tid;
+	uint32_t waitTime;
+
+	if (wiringPiSetup() == -1) {
+		printf("Sorry! Failed to initialize GPIO!\n");
+		exit(1);
+	}
+
+	gpioInit(DHT11_DATA);
+
+	while (1) {
+		blockFlag = 1;
+		waitTime = 5;
+
+		if (pthread_create(&tid, NULL, readDHT11Data, NULL) != 0) {		//如果考虑到多线程并发，仍然有小 bug
+			printf("[%s|%s|%d]: Thread creation failed!\n",\
+					__FILE__, __func__, __LINE__);
+			return -1;
+		}
+
+		while (waitTime && blockFlag) {		//线程执行 5 秒后，blockFlag仍然为置 0，说明线程卡死
+			delay(1000);
+			waitTime--;
+		}
+
+		if (1 == blockFlag) {		//将卡死的线程强行结束
+			pthread_cancel(tid);
+			printf("[%s|%s|%d]: Thread timeout! Exit!\n",\
+					__FILE__, __func__, __LINE__);
+		}
+		delay(1000);
+	}
+
+	return 0;
+}
+
+
 ```
 
 
@@ -1257,6 +1397,13 @@ systemctl enable x11vnc
 #### 6.5、QT
 
 ##### 安装
+
+```
+//直接运行：
+install_qt.sh
+```
+
+以下无需操作
 
 ```
 // 安装qt5编译器
@@ -1569,3 +1716,306 @@ make install
 
 
 # 底部
+
+```
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>MainWindow</class>
+ <widget class="QMainWindow" name="MainWindow">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>813</width>
+    <height>591</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>Smart Home System</string>
+  </property>
+  <widget class="QWidget" name="centralWidget">
+   <layout class="QVBoxLayout" name="verticalLayout">
+    <property name="spacing">
+     <number>20</number>
+    </property>
+    <item>
+     <widget class="QLabel" name="labelTitle">
+      <property name="styleSheet">
+       <string notr="true">font-size: 18pt; font-weight: bold;</string>
+      </property>
+      <property name="text">
+       <string>Smart Home System</string>
+      </property>
+      <property name="alignment">
+       <set>Qt::AlignCenter</set>
+      </property>
+     </widget>
+    </item>
+    <item>
+     <spacer name="verticalSpacer_2">
+      <property name="orientation">
+       <enum>Qt::Vertical</enum>
+      </property>
+      <property name="sizeHint" stdset="0">
+       <size>
+        <width>20</width>
+        <height>40</height>
+       </size>
+      </property>
+     </spacer>
+    </item>
+    <item>
+     <layout class="QHBoxLayout" name="horizontalLayout1">
+      <item>
+       <widget class="QLabel" name="label">
+        <property name="minimumSize">
+         <size>
+          <width>37</width>
+          <height>23</height>
+         </size>
+        </property>
+        <property name="styleSheet">
+         <string notr="true">#label{
+	fond-size:20px;
+	color:rgb(0, 0, 0);
+	
+}
+</string>
+        </property>
+        <property name="text">
+         <string>temp: </string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QLineEdit" name="lineEdit"/>
+      </item>
+      <item>
+       <spacer name="horizontalSpacer_3">
+        <property name="orientation">
+         <enum>Qt::Horizontal</enum>
+        </property>
+        <property name="sizeHint" stdset="0">
+         <size>
+          <width>40</width>
+          <height>20</height>
+         </size>
+        </property>
+       </spacer>
+      </item>
+      <item>
+       <spacer name="horizontalSpacer1">
+        <property name="orientation">
+         <enum>Qt::Vertical</enum>
+        </property>
+        <property name="sizeType">
+         <enum>QSizePolicy::Expanding</enum>
+        </property>
+        <property name="sizeHint" stdset="0">
+         <size>
+          <width>0</width>
+          <height>0</height>
+         </size>
+        </property>
+       </spacer>
+      </item>
+      <item>
+       <spacer name="horizontalSpacer">
+        <property name="orientation">
+         <enum>Qt::Horizontal</enum>
+        </property>
+        <property name="sizeHint" stdset="0">
+         <size>
+          <width>40</width>
+          <height>20</height>
+         </size>
+        </property>
+       </spacer>
+      </item>
+      <item>
+       <widget class="QLabel" name="label_2">
+        <property name="text">
+         <string>Wet:</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QLineEdit" name="lineEdit_2"/>
+      </item>
+      <item>
+       <spacer name="horizontalSpacer_6">
+        <property name="orientation">
+         <enum>Qt::Horizontal</enum>
+        </property>
+        <property name="sizeHint" stdset="0">
+         <size>
+          <width>40</width>
+          <height>20</height>
+         </size>
+        </property>
+       </spacer>
+      </item>
+      <item>
+       <spacer name="horizontalSpacer_4">
+        <property name="orientation">
+         <enum>Qt::Horizontal</enum>
+        </property>
+        <property name="sizeHint" stdset="0">
+         <size>
+          <width>40</width>
+          <height>20</height>
+         </size>
+        </property>
+       </spacer>
+      </item>
+      <item>
+       <spacer name="horizontalSpacer3">
+        <property name="orientation">
+         <enum>Qt::Vertical</enum>
+        </property>
+        <property name="sizeType">
+         <enum>QSizePolicy::Expanding</enum>
+        </property>
+        <property name="sizeHint" stdset="0">
+         <size>
+          <width>0</width>
+          <height>0</height>
+         </size>
+        </property>
+       </spacer>
+      </item>
+     </layout>
+    </item>
+    <item>
+     <spacer name="verticalSpacer">
+      <property name="orientation">
+       <enum>Qt::Vertical</enum>
+      </property>
+      <property name="sizeHint" stdset="0">
+       <size>
+        <width>20</width>
+        <height>40</height>
+       </size>
+      </property>
+     </spacer>
+    </item>
+    <item>
+     <layout class="QHBoxLayout" name="horizontalLayout2">
+      <item>
+       <spacer name="horizontalSpacer4">
+        <property name="orientation">
+         <enum>Qt::Vertical</enum>
+        </property>
+        <property name="sizeType">
+         <enum>QSizePolicy::Expanding</enum>
+        </property>
+        <property name="sizeHint" stdset="0">
+         <size>
+          <width>0</width>
+          <height>0</height>
+         </size>
+        </property>
+       </spacer>
+      </item>
+      <item>
+       <widget class="QPushButton" name="button4">
+        <property name="styleSheet">
+         <string notr="true">font-size: 14pt; padding: 10px;</string>
+        </property>
+        <property name="text">
+         <string>LED Switch</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <spacer name="horizontalSpacer5">
+        <property name="orientation">
+         <enum>Qt::Vertical</enum>
+        </property>
+        <property name="sizeType">
+         <enum>QSizePolicy::Expanding</enum>
+        </property>
+        <property name="sizeHint" stdset="0">
+         <size>
+          <width>0</width>
+          <height>0</height>
+         </size>
+        </property>
+       </spacer>
+      </item>
+      <item>
+       <widget class="QPushButton" name="button5">
+        <property name="styleSheet">
+         <string notr="true">font-size: 14pt; padding: 10px;</string>
+        </property>
+        <property name="text">
+         <string>Breathing</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <spacer name="horizontalSpacer6">
+        <property name="orientation">
+         <enum>Qt::Vertical</enum>
+        </property>
+        <property name="sizeType">
+         <enum>QSizePolicy::Expanding</enum>
+        </property>
+        <property name="sizeHint" stdset="0">
+         <size>
+          <width>0</width>
+          <height>0</height>
+         </size>
+        </property>
+       </spacer>
+      </item>
+      <item>
+       <widget class="QPushButton" name="button6">
+        <property name="styleSheet">
+         <string notr="true">font-size: 14pt; padding: 10px;</string>
+        </property>
+        <property name="text">
+         <string>Flashing</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <spacer name="horizontalSpacer7">
+        <property name="orientation">
+         <enum>Qt::Vertical</enum>
+        </property>
+        <property name="sizeType">
+         <enum>QSizePolicy::Expanding</enum>
+        </property>
+        <property name="sizeHint" stdset="0">
+         <size>
+          <width>0</width>
+          <height>0</height>
+         </size>
+        </property>
+       </spacer>
+      </item>
+     </layout>
+    </item>
+    <item>
+     <spacer name="verticalSpacer_4">
+      <property name="orientation">
+       <enum>Qt::Vertical</enum>
+      </property>
+      <property name="sizeHint" stdset="0">
+       <size>
+        <width>20</width>
+        <height>40</height>
+       </size>
+      </property>
+     </spacer>
+    </item>
+   </layout>
+  </widget>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>
+
+```
+
