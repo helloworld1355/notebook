@@ -1,3 +1,15 @@
+# vmware安装
+
+安装vmtools
+
+```shell
+sudo apt install open-vm-tools-desktop -y
+```
+
+
+
+
+
 # 基础命令：
 
 ```shell
