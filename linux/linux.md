@@ -97,6 +97,15 @@ lsb_release -a
 uname -a
 ```
 
+## 创建用户
+
+```bash
+# 创建用户
+adduser ${userName}
+```
+
+
+
 ## 网络：
 
 ```
